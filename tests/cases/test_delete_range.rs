@@ -16,7 +16,7 @@ use rocksdb::*;
 use std::fs;
 use tempdir::TempDir;
 
-fn gen_sst(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str) {
+fn gen_sst(opt: ColumnFamilyOptions, cf: Option<CFHandle>, path: &str) {
     let _ = fs::remove_file(path);
     let env_opt = EnvOptions::new();
     let mut writer = if cf.is_some() {
@@ -32,7 +32,7 @@ fn gen_sst(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str) {
     writer.finish().unwrap();
 }
 
-fn gen_sst_from_db(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str, db: &DB) {
+fn gen_sst_from_db(opt: ColumnFamilyOptions, cf: Option<CFHandle>, path: &str, db: &DB) {
     let _ = fs::remove_file(path);
     let env_opt = EnvOptions::new();
     let mut writer = if cf.is_some() {
@@ -623,7 +623,7 @@ impl SliceTransform for FixedSuffixSliceTransform {
     }
 }
 
-pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
+pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<CFHandle<'a>, String> {
     db.cf_handle(cf)
         .ok_or_else(|| format!("cf {} not found.", cf))
 }
@@ -1181,7 +1181,7 @@ fn test_delete_range_prefix_bloom_case_6() {
     assert_eq!(before, after);
 }
 
-fn check_kv(db: &DB, cf: Option<&CFHandle>, data: &[(&[u8], Option<&[u8]>)]) {
+fn check_kv(db: &DB, cf: Option<CFHandle>, data: &[(&[u8], Option<&[u8]>)]) {
     for &(k, v) in data {
         if cf.is_some() {
             if v.is_none() {
@@ -1421,7 +1421,7 @@ fn test_delete_range_ingest_file() {
     let path_str = path.path().to_str().unwrap();
     let mut opts = DBOptions::new();
     opts.create_if_missing(true);
-    let mut db = DB::open(opts, path_str).unwrap();
+    let db = DB::open(opts, path_str).unwrap();
     let gen_path = TempDir::new("_rust_rocksdb_ingest_sst_gen").expect("");
     let test_sstfile = gen_path.path().join("test_sst_file");
     let test_sstfile_str = test_sstfile.to_str().unwrap();

@@ -82,7 +82,7 @@ impl TablePropertiesCollector for TitanCollector {
 struct TitanCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for TitanCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
         Box::new(TitanCollector::default())
     }
 }
@@ -176,7 +176,7 @@ fn test_titandb() {
     let cf_handle = db.cf_handle("default").unwrap();
     readopts = ReadOptions::new();
     readopts.set_titan_key_only(true);
-    iter = db.iter_cf_opt(&cf_handle, readopts);
+    iter = db.iter_cf_opt(cf_handle, readopts);
     iter.seek(SeekKey::Start);
     for i in 0..n {
         for j in 0..n {

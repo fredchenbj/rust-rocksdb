@@ -56,7 +56,7 @@ fn test_metadata() {
     }
 }
 
-fn get_files_cf(db: &DB, cf: &CFHandle, max_level: usize) -> Vec<String> {
+fn get_files_cf(db: &DB, cf: CFHandle, max_level: usize) -> Vec<String> {
     let mut files = Vec::new();
     let cf_meta = db.get_column_family_meta_data(cf);
     for (i, level) in cf_meta.get_levels().iter().enumerate() {
