@@ -416,7 +416,7 @@ impl ReadOptions {
         }
     }
 
-    pub fn set_table_filter(&mut self, filter: Box<TableFilter>) {
+    pub fn set_table_filter(&mut self, filter: Box<dyn TableFilter>) {
         unsafe {
             let f = Box::into_raw(Box::new(filter));
             crocksdb_ffi::crocksdb_readoptions_set_table_filter(
@@ -1144,7 +1144,7 @@ impl ColumnFamilyOptions {
         &mut self,
         name: S,
         ignore_snapshots: bool,
-        filter: Box<CompactionFilter>,
+        filter: Box<dyn CompactionFilter>,
     ) -> Result<(), String>
     where
         S: Into<Vec<u8>>,
@@ -1166,7 +1166,7 @@ impl ColumnFamilyOptions {
     pub fn add_table_properties_collector_factory(
         &mut self,
         fname: &str,
-        factory: Box<TablePropertiesCollectorFactory>,
+        factory: Box<dyn TablePropertiesCollectorFactory>,
     ) {
         unsafe {
             let f = new_table_properties_collector_factory(fname, factory);
@@ -1437,7 +1437,7 @@ impl ColumnFamilyOptions {
     pub fn set_prefix_extractor<S>(
         &mut self,
         name: S,
-        transform: Box<SliceTransform>,
+        transform: Box<dyn SliceTransform>,
     ) -> Result<(), String>
     where
         S: Into<Vec<u8>>,
@@ -1462,7 +1462,7 @@ impl ColumnFamilyOptions {
     pub fn set_memtable_insert_hint_prefix_extractor<S>(
         &mut self,
         name: S,
-        transform: Box<SliceTransform>,
+        transform: Box<dyn SliceTransform>,
     ) -> Result<(), String>
     where
         S: Into<Vec<u8>>,

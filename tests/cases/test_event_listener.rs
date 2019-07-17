@@ -134,7 +134,7 @@ fn test_event_listener_stall_conditions_changed() {
     cf_opts.set_level_zero_slowdown_writes_trigger(1);
     cf_opts.set_level_zero_stop_writes_trigger(1);
     cf_opts.set_level_zero_file_num_compaction_trigger(1);
-    let mut db = DB::open_cf(
+    let db = DB::open_cf(
         opts,
         path_str,
         vec![("default", ColumnFamilyOptions::new())],

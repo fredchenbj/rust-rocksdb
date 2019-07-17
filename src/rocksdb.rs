@@ -25,37 +25,30 @@ use rocksdb_options::{
     IngestExternalFileOptions, LRUCacheOptions, ReadOptions, RestoreOptions, UnsafeSnap,
     WriteOptions,
 };
-use std::collections::btree_map::Entry;
+
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::fmt::{self, Debug, Formatter};
 use std::io;
+use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, Mutex};
 use std::{fs, ptr, slice};
 use table_properties::TablePropertiesCollection;
 use util::is_power_of_two;
 
-pub struct CFHandle {
+/// An opaque type used to represent a column family. Returned from some functions, and used
+/// in others
+#[derive(Copy, Clone)]
+pub struct CFHandle<'a> {
     inner: *mut DBCFHandle,
+    db: PhantomData<&'a DB>,
 }
 
-impl CFHandle {
-    pub fn id(&self) -> u32 {
-        unsafe { crocksdb_ffi::crocksdb_column_family_handle_id(self.inner) }
-    }
-}
-
-impl Drop for CFHandle {
-    fn drop(&mut self) {
-        unsafe {
-            crocksdb_ffi::crocksdb_column_family_handle_destroy(self.inner);
-        }
-    }
-}
+unsafe impl<'a> Send for CFHandle<'a> {}
 
 fn ensure_default_cf_exists<'a>(list: &mut Vec<ColumnFamilyDescriptor<'a>>, ttls: &mut Vec<i32>) {
     let contains = list.iter().any(|ref cf| cf.is_default());
@@ -88,16 +81,32 @@ fn build_cstring_list(str_list: &[&str]) -> Vec<CString> {
 
 pub struct DB {
     inner: *mut DBInstance,
-    cfs: BTreeMap<String, CFHandle>,
+    cfs: Arc<RwLock<BTreeMap<String, *mut DBCFHandle>>>,
     path: String,
     opts: DBOptions,
-    _cf_opts: Vec<ColumnFamilyOptions>,
     readonly: bool,
+    createcf: Arc<Mutex<i32>>,
 }
 
 impl Debug for DB {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "Db [path={}]", self.path)
+    }
+}
+
+impl Drop for DB {
+    fn drop(&mut self) {
+        // SyncWAL before call close.
+        if !self.readonly {
+            // DB::SyncWal requires writable file support thread safe sync, but
+            // not all types of env can create writable file that support thread
+            // safe sync. eg, MemEnv.
+            self.sync_wal().unwrap_or_else(|_| {});
+        }
+        unsafe {
+            self.cfs.write().unwrap().clear();
+            crocksdb_ffi::crocksdb_close(self.inner);
+        }
     }
 }
 
@@ -160,7 +169,7 @@ impl<D: Deref<Target = DB>> DBIterator<D> {
         }
     }
 
-    pub fn new_cf(db: D, cf_handle: &CFHandle, readopts: ReadOptions) -> DBIterator<D> {
+    pub fn new_cf(db: D, cf_handle: CFHandle, readopts: ReadOptions) -> DBIterator<D> {
         unsafe {
             let iterator = if db.is_titan() {
                 crocksdb_ffi::ctitandb_create_iterator_cf(
@@ -329,7 +338,7 @@ impl<D: Deref<Target = DB>> Snapshot<D> {
         DBIterator::new(&self.db, opt)
     }
 
-    pub fn iter_cf(&self, cf_handle: &CFHandle, mut opt: ReadOptions) -> DBIterator<&DB> {
+    pub fn iter_cf(&self, cf_handle: CFHandle, mut opt: ReadOptions) -> DBIterator<&DB> {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
@@ -344,7 +353,7 @@ impl<D: Deref<Target = DB>> Snapshot<D> {
         self.db.get_opt(key, &readopts)
     }
 
-    pub fn get_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<Option<DBVector>, String> {
+    pub fn get_cf(&self, cf: CFHandle, key: &[u8]) -> Result<Option<DBVector>, String> {
         let mut readopts = ReadOptions::new();
         unsafe {
             readopts.set_snapshot(&self.snap);
@@ -367,20 +376,16 @@ impl<D: Deref<Target = DB>> Drop for Snapshot<D> {
 // This is for the DB and write batches to share the same API
 pub trait Writable {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<(), String>;
-    fn put_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<(), String>;
+    fn put_cf(&self, cf: CFHandle, key: &[u8], value: &[u8]) -> Result<(), String>;
     fn merge(&self, key: &[u8], value: &[u8]) -> Result<(), String>;
-    fn merge_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<(), String>;
+    fn merge_cf(&self, cf: CFHandle, key: &[u8], value: &[u8]) -> Result<(), String>;
     fn delete(&self, key: &[u8]) -> Result<(), String>;
-    fn delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<(), String>;
+    fn delete_cf(&self, cf: CFHandle, key: &[u8]) -> Result<(), String>;
     fn single_delete(&self, key: &[u8]) -> Result<(), String>;
-    fn single_delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<(), String>;
+    fn single_delete_cf(&self, cf: CFHandle, key: &[u8]) -> Result<(), String>;
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<(), String>;
-    fn delete_range_cf(
-        &self,
-        cf: &CFHandle,
-        begin_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<(), String>;
+    fn delete_range_cf(&self, cf: CFHandle, begin_key: &[u8], end_key: &[u8])
+        -> Result<(), String>;
 }
 
 /// A range of keys, `start_key` is included, but not `end_key`.
@@ -611,19 +616,23 @@ impl DB {
             return Err(ERR_NULL_DB_ONINIT.to_owned());
         }
 
-        let cfs = names
-            .into_iter()
-            .zip(cf_handles)
-            .map(|(s, h)| (s.to_owned(), CFHandle { inner: h }))
-            .collect();
+        let cfs = Arc::new(RwLock::new(
+            names
+                .into_iter()
+                .zip(cf_handles)
+                .map(|(s, h)| (s.to_owned(), h))
+                .collect(),
+        ));
+
+        let createcf = Arc::new(Mutex::new(0));
 
         Ok(DB {
             inner: db,
             cfs: cfs,
             path: path.to_owned(),
             opts: opts,
-            _cf_opts: options,
             readonly: readonly,
+            createcf: createcf,
         })
     }
 
@@ -734,7 +743,7 @@ impl DB {
 
     pub fn get_cf_opt(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         key: &[u8],
         readopts: &ReadOptions,
     ) -> Result<Option<DBVector>, String> {
@@ -754,11 +763,11 @@ impl DB {
         }
     }
 
-    pub fn get_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<Option<DBVector>, String> {
+    pub fn get_cf(&self, cf: CFHandle, key: &[u8]) -> Result<Option<DBVector>, String> {
         self.get_cf_opt(cf, key, &ReadOptions::new())
     }
 
-    pub fn create_cf<'a, T>(&mut self, cfd: T) -> Result<&CFHandle, String>
+    pub fn create_cf<'a, T>(&self, cfd: T) -> Result<CFHandle, String>
     where
         T: Into<ColumnFamilyDescriptor<'a>>,
     {
@@ -770,44 +779,59 @@ impl DB {
             }
         };
         let cname_ptr = cname.as_ptr();
-        unsafe {
-            let cf_handler = ffi_try!(crocksdb_create_column_family(
+        let cf =
+        {
+            let _lo = self.createcf.lock().unwrap();
+            if self.cfs.read().unwrap().get(cfd.name) != None {
+                return Err("cf existed".to_owned());
+            }
+            unsafe {
+                let cf_handle = ffi_try!(crocksdb_create_column_family(
                 self.inner,
                 cfd.options.inner,
                 cname_ptr
             ));
-            let handle = CFHandle { inner: cf_handler };
-            self._cf_opts.push(cfd.options);
-            Ok(match self.cfs.entry(cfd.name.to_owned()) {
-                Entry::Occupied(mut e) => {
-                    e.insert(handle);
-                    e.into_mut()
+
+                self.cfs
+                    .write()
+                    .unwrap()
+                    .insert(cfd.name.to_owned(), cf_handle);
+
+                CFHandle {
+                    inner: cf_handle,
+                    db: PhantomData,
                 }
-                Entry::Vacant(e) => e.insert(handle),
-            })
-        }
+            }
+        };
+        Ok(cf)
     }
 
-    pub fn drop_cf(&mut self, name: &str) -> Result<(), String> {
-        let cf = self.cfs.remove(name);
+    pub fn drop_cf(&self, name: &str) -> Result<(), String> {
+        let cf = self.cfs.write().unwrap().remove(name);
         if cf.is_none() {
             return Err(format!("Invalid column family: {}", name).clone());
         }
 
         unsafe {
-            ffi_try!(crocksdb_drop_column_family(self.inner, cf.unwrap().inner));
+            ffi_try!(crocksdb_drop_column_family(self.inner, cf.unwrap()));
         }
 
         Ok(())
     }
 
-    pub fn cf_handle(&self, name: &str) -> Option<&CFHandle> {
-        self.cfs.get(name)
+    pub fn cf_handle(&self, name: &str) -> Option<CFHandle> {
+        self.cfs.read().ok()?.get(name).map(|h| CFHandle {
+            inner: *h,
+            db: PhantomData,
+        })
     }
 
     /// get all column family names, including 'default'.
-    pub fn cf_names(&self) -> Vec<&str> {
-        self.cfs.iter().map(|(k, _)| k.as_str()).collect()
+    pub fn cf_names(&self) -> Vec<String> {
+        if let Ok(cfs) = self.cfs.read() {
+            return cfs.keys().cloned().collect();
+        }
+        vec![]
     }
 
     pub fn iter(&self) -> DBIterator<&DB> {
@@ -819,12 +843,12 @@ impl DB {
         DBIterator::new(&self, opt)
     }
 
-    pub fn iter_cf(&self, cf_handle: &CFHandle) -> DBIterator<&DB> {
+    pub fn iter_cf(&self, cf_handle: CFHandle) -> DBIterator<&DB> {
         let opts = ReadOptions::new();
         DBIterator::new_cf(self, cf_handle, opts)
     }
 
-    pub fn iter_cf_opt(&self, cf_handle: &CFHandle, opts: ReadOptions) -> DBIterator<&DB> {
+    pub fn iter_cf_opt(&self, cf_handle: CFHandle, opts: ReadOptions) -> DBIterator<&DB> {
         DBIterator::new_cf(self, cf_handle, opts)
     }
 
@@ -861,7 +885,7 @@ impl DB {
 
     pub fn put_cf_opt(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         key: &[u8],
         value: &[u8],
         writeopts: &WriteOptions,
@@ -899,7 +923,7 @@ impl DB {
     }
     fn merge_cf_opt(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         key: &[u8],
         value: &[u8],
         writeopts: &WriteOptions,
@@ -931,7 +955,7 @@ impl DB {
 
     fn delete_cf_opt(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         key: &[u8],
         writeopts: &WriteOptions,
     ) -> Result<(), String> {
@@ -961,7 +985,7 @@ impl DB {
 
     fn single_delete_cf_opt(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         key: &[u8],
         writeopts: &WriteOptions,
     ) -> Result<(), String> {
@@ -979,7 +1003,7 @@ impl DB {
 
     fn delete_range_cf_opt(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         begin_key: &[u8],
         end_key: &[u8],
         writeopts: &WriteOptions,
@@ -1011,7 +1035,7 @@ impl DB {
 
     /// Flush all memtable data for specified cf.
     /// If sync, the flush will wait until the flush is done.
-    pub fn flush_cf(&self, cf: &CFHandle, sync: bool) -> Result<(), String> {
+    pub fn flush_cf(&self, cf: CFHandle, sync: bool) -> Result<(), String> {
         unsafe {
             let mut opts = FlushOptions::new();
             opts.set_wait(sync);
@@ -1056,11 +1080,11 @@ impl DB {
         self.get_approximate_sizes_cfopt(None, ranges)
     }
 
-    pub fn get_approximate_sizes_cf(&self, cf: &CFHandle, ranges: &[Range]) -> Vec<u64> {
+    pub fn get_approximate_sizes_cf(&self, cf: CFHandle, ranges: &[Range]) -> Vec<u64> {
         self.get_approximate_sizes_cfopt(Some(cf), ranges)
     }
 
-    fn get_approximate_sizes_cfopt(&self, cf: Option<&CFHandle>, ranges: &[Range]) -> Vec<u64> {
+    fn get_approximate_sizes_cfopt(&self, cf: Option<CFHandle>, ranges: &[Range]) -> Vec<u64> {
         let start_keys: Vec<*const u8> = ranges.iter().map(|x| x.start_key.as_ptr()).collect();
         let start_key_lens: Vec<_> = ranges.iter().map(|x| x.start_key.len()).collect();
         let end_keys: Vec<*const u8> = ranges.iter().map(|x| x.end_key.as_ptr()).collect();
@@ -1120,7 +1144,7 @@ impl DB {
     }
 
     // Return the approximate number of records and size in the range of memtables of the cf.
-    pub fn get_approximate_memtable_stats_cf(&self, cf: &CFHandle, range: &Range) -> (u64, u64) {
+    pub fn get_approximate_memtable_stats_cf(&self, cf: CFHandle, range: &Range) -> (u64, u64) {
         let (mut count, mut size) = (0, 0);
         unsafe {
             crocksdb_ffi::crocksdb_approximate_memtable_stats_cf(
@@ -1145,12 +1169,7 @@ impl DB {
         }
     }
 
-    pub fn compact_range_cf(
-        &self,
-        cf: &CFHandle,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-    ) {
+    pub fn compact_range_cf(&self, cf: CFHandle, start_key: Option<&[u8]>, end_key: Option<&[u8]>) {
         unsafe {
             let (start, s_len) = start_key.map_or((ptr::null(), 0), |k| (k.as_ptr(), k.len()));
             let (end, e_len) = end_key.map_or((ptr::null(), 0), |k| (k.as_ptr(), k.len()));
@@ -1160,7 +1179,7 @@ impl DB {
 
     pub fn compact_range_cf_opt(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         compact_options: &CompactOptions,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -1201,7 +1220,7 @@ impl DB {
 
     pub fn delete_files_in_range_cf(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         start_key: &[u8],
         end_key: &[u8],
         include_end: bool,
@@ -1222,7 +1241,7 @@ impl DB {
 
     pub fn delete_files_in_ranges_cf(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         ranges: &[Range],
         include_end: bool,
     ) -> Result<(), String> {
@@ -1249,7 +1268,7 @@ impl DB {
         self.get_property_value_cf_opt(None, name)
     }
 
-    pub fn get_property_value_cf(&self, cf: &CFHandle, name: &str) -> Option<String> {
+    pub fn get_property_value_cf(&self, cf: CFHandle, name: &str) -> Option<String> {
         self.get_property_value_cf_opt(Some(cf), name)
     }
 
@@ -1259,11 +1278,11 @@ impl DB {
         self.get_property_int_cf_opt(None, name)
     }
 
-    pub fn get_property_int_cf(&self, cf: &CFHandle, name: &str) -> Option<u64> {
+    pub fn get_property_int_cf(&self, cf: CFHandle, name: &str) -> Option<u64> {
         self.get_property_int_cf_opt(Some(cf), name)
     }
 
-    fn get_property_value_cf_opt(&self, cf: Option<&CFHandle>, name: &str) -> Option<String> {
+    fn get_property_value_cf_opt(&self, cf: Option<CFHandle>, name: &str) -> Option<String> {
         unsafe {
             let prop_name = CString::new(name).unwrap();
 
@@ -1287,7 +1306,7 @@ impl DB {
         }
     }
 
-    fn get_property_int_cf_opt(&self, cf: Option<&CFHandle>, name: &str) -> Option<u64> {
+    fn get_property_int_cf_opt(&self, cf: Option<CFHandle>, name: &str) -> Option<u64> {
         // Rocksdb guarantees that the return property int
         // value is u64 if exists.
         if let Some(value) = self.get_property_value_cf_opt(cf, name) {
@@ -1369,14 +1388,14 @@ impl DB {
         }
     }
 
-    pub fn get_options_cf(&self, cf: &CFHandle) -> ColumnFamilyOptions {
+    pub fn get_options_cf(&self, cf: CFHandle) -> ColumnFamilyOptions {
         unsafe {
             let inner = crocksdb_ffi::crocksdb_get_options_cf(self.inner, cf.inner);
             ColumnFamilyOptions::from_raw(inner)
         }
     }
 
-    pub fn set_options_cf(&self, cf: &CFHandle, options: &[(&str, &str)]) -> Result<(), String> {
+    pub fn set_options_cf(&self, cf: CFHandle, options: &[(&str, &str)]) -> Result<(), String> {
         unsafe {
             let name_strs: Vec<_> = options
                 .iter()
@@ -1419,7 +1438,7 @@ impl DB {
 
     pub fn ingest_external_file_cf(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         opt: &IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<(), String> {
@@ -1443,7 +1462,7 @@ impl DB {
     /// Returns true if a memtable is flushed without blocking.
     pub fn ingest_external_file_optimized(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         opt: &IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<bool, String> {
@@ -1514,7 +1533,7 @@ impl DB {
         self.get_options().get_block_cache_usage()
     }
 
-    pub fn get_block_cache_usage_cf(&self, cf: &CFHandle) -> u64 {
+    pub fn get_block_cache_usage_cf(&self, cf: CFHandle) -> u64 {
         self.get_options_cf(cf).get_block_cache_usage()
     }
 
@@ -1527,7 +1546,7 @@ impl DB {
 
     pub fn get_properties_of_all_tables_cf(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
     ) -> Result<TablePropertiesCollection, String> {
         unsafe {
             let props = ffi_try!(crocksdb_get_properties_of_all_tables_cf(
@@ -1539,7 +1558,7 @@ impl DB {
 
     pub fn get_properties_of_tables_in_range(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         ranges: &[Range],
     ) -> Result<TablePropertiesCollection, String> {
         let start_keys: Vec<*const u8> = ranges.iter().map(|x| x.start_key.as_ptr()).collect();
@@ -1592,7 +1611,7 @@ impl DB {
         }
     }
 
-    pub fn get_column_family_meta_data(&self, cf: &CFHandle) -> ColumnFamilyMetaData {
+    pub fn get_column_family_meta_data(&self, cf: CFHandle) -> ColumnFamilyMetaData {
         unsafe {
             let inner = crocksdb_ffi::crocksdb_column_family_meta_data_create();
             crocksdb_ffi::crocksdb_get_column_family_meta_data(self.inner, cf.inner, inner);
@@ -1602,7 +1621,7 @@ impl DB {
 
     pub fn compact_files_cf(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         opts: &CompactionOptions,
         input_files: &[String],
         output_level: i32,
@@ -1631,7 +1650,7 @@ impl Writable for DB {
         self.put_opt(key, value, &WriteOptions::new())
     }
 
-    fn put_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
+    fn put_cf(&self, cf: CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
         self.put_cf_opt(cf, key, value, &WriteOptions::new())
     }
 
@@ -1639,7 +1658,7 @@ impl Writable for DB {
         self.merge_opt(key, value, &WriteOptions::new())
     }
 
-    fn merge_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
+    fn merge_cf(&self, cf: CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
         self.merge_cf_opt(cf, key, value, &WriteOptions::new())
     }
 
@@ -1647,7 +1666,7 @@ impl Writable for DB {
         self.delete_opt(key, &WriteOptions::new())
     }
 
-    fn delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<(), String> {
+    fn delete_cf(&self, cf: CFHandle, key: &[u8]) -> Result<(), String> {
         self.delete_cf_opt(cf, key, &WriteOptions::new())
     }
 
@@ -1655,7 +1674,7 @@ impl Writable for DB {
         self.single_delete_opt(key, &WriteOptions::new())
     }
 
-    fn single_delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<(), String> {
+    fn single_delete_cf(&self, cf: CFHandle, key: &[u8]) -> Result<(), String> {
         self.single_delete_cf_opt(cf, key, &WriteOptions::new())
     }
 
@@ -1666,7 +1685,7 @@ impl Writable for DB {
 
     fn delete_range_cf(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         begin_key: &[u8],
         end_key: &[u8],
     ) -> Result<(), String> {
@@ -1742,22 +1761,6 @@ impl Drop for WriteBatch {
     }
 }
 
-impl Drop for DB {
-    fn drop(&mut self) {
-        // SyncWAL before call close.
-        if !self.readonly {
-            // DB::SyncWal requires writable file support thread safe sync, but
-            // not all types of env can create writable file that support thread
-            // safe sync. eg, MemEnv.
-            self.sync_wal().unwrap_or_else(|_| {});
-        }
-        unsafe {
-            self.cfs.clear();
-            crocksdb_ffi::crocksdb_close(self.inner);
-        }
-    }
-}
-
 impl Writable for WriteBatch {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<(), String> {
         unsafe {
@@ -1772,7 +1775,7 @@ impl Writable for WriteBatch {
         }
     }
 
-    fn put_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
+    fn put_cf(&self, cf: CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
         unsafe {
             crocksdb_ffi::crocksdb_writebatch_put_cf(
                 self.inner,
@@ -1799,7 +1802,7 @@ impl Writable for WriteBatch {
         }
     }
 
-    fn merge_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
+    fn merge_cf(&self, cf: CFHandle, key: &[u8], value: &[u8]) -> Result<(), String> {
         unsafe {
             crocksdb_ffi::crocksdb_writebatch_merge_cf(
                 self.inner,
@@ -1820,7 +1823,7 @@ impl Writable for WriteBatch {
         }
     }
 
-    fn delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<(), String> {
+    fn delete_cf(&self, cf: CFHandle, key: &[u8]) -> Result<(), String> {
         unsafe {
             crocksdb_ffi::crocksdb_writebatch_delete_cf(
                 self.inner,
@@ -1843,7 +1846,7 @@ impl Writable for WriteBatch {
         }
     }
 
-    fn single_delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<(), String> {
+    fn single_delete_cf(&self, cf: CFHandle, key: &[u8]) -> Result<(), String> {
         unsafe {
             crocksdb_ffi::crocksdb_writebatch_single_delete_cf(
                 self.inner,
@@ -1870,7 +1873,7 @@ impl Writable for WriteBatch {
 
     fn delete_range_cf(
         &self,
-        cf: &CFHandle,
+        cf: CFHandle,
         begin_key: &[u8],
         end_key: &[u8],
     ) -> Result<(), String> {
@@ -1995,7 +1998,7 @@ impl SstFileWriter {
         }
     }
 
-    pub fn new_cf(env_opt: EnvOptions, opt: ColumnFamilyOptions, cf: &CFHandle) -> SstFileWriter {
+    pub fn new_cf(env_opt: EnvOptions, opt: ColumnFamilyOptions, cf: CFHandle) -> SstFileWriter {
         unsafe {
             SstFileWriter {
                 inner: crocksdb_ffi::crocksdb_sstfilewriter_create_cf(
@@ -2334,7 +2337,7 @@ impl Drop for Cache {
 
 pub fn set_external_sst_file_global_seq_no(
     db: &DB,
-    cf: &CFHandle,
+    cf: CFHandle,
     file: &str,
     seq_no: u64,
 ) -> Result<u64, String> {
@@ -2588,7 +2591,7 @@ mod test {
 
             let mut opts = DBOptions::new();
             opts.create_if_missing(true);
-            let mut db = DB::open(opts, path.path().to_str().unwrap()).unwrap();
+            let db = DB::open(opts, path.path().to_str().unwrap()).unwrap();
             for (cf, cf_opts) in cfs.iter().zip(cfs_opts) {
                 if *cf == "default" {
                     continue;
@@ -2777,7 +2780,7 @@ mod test {
         let path = TempDir::new("_rust_rocksdb_flush_cf").expect("");
         let mut opts = DBOptions::new();
         opts.create_if_missing(true);
-        let mut db = DB::open(opts, path.path().to_str().unwrap()).unwrap();
+        let db = DB::open(opts, path.path().to_str().unwrap()).unwrap();
         db.create_cf("cf").unwrap();
 
         let cf_handle = db.cf_handle("cf").unwrap();
@@ -2804,7 +2807,7 @@ mod test {
             println!("{:?}", c);
             println!("{}", c as u32);
             match c as u32 {
-                0...5 | 7 | 0x40 => assert!(true),
+                0..=5 | 7 | 0x40 => assert!(true),
                 _ => assert!(false),
             }
         }
@@ -2902,7 +2905,7 @@ mod test {
 
         let mut opts = DBOptions::new();
         opts.create_if_missing(true);
-        let mut db = DB::open(opts, dbpath).unwrap();
+        let db = DB::open(opts, dbpath).unwrap();
 
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_compaction_dynamic_level_bytes(true);
