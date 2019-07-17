@@ -36,7 +36,7 @@ fn initial_data(path: &str) -> DB {
 }
 
 /// Generates a file with `range` and put it to the bottommost level.
-fn generate_file_bottom_level(db: &DB, handle: &CFHandle, range: ops::Range<u32>) {
+fn generate_file_bottom_level(db: &DB, handle: CFHandle, range: ops::Range<u32>) {
     for i in range {
         let k = format!("key{}", i);
         let v = format!("value{}", i);

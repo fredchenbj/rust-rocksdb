@@ -838,6 +838,20 @@ crocksdb_column_family_handle_t* crocksdb_create_column_family(
   return handle;
 }
 
+crocksdb_column_family_handle_t* crocksdb_create_column_family_with_ttl(
+    crocksdb_t* db,
+    const crocksdb_options_t* column_family_options,
+    const char* column_family_name,
+    const int ttl,
+    char** errptr) {
+  crocksdb_column_family_handle_t* handle = new crocksdb_column_family_handle_t;
+  auto* db_ttl = reinterpret_cast<rocksdb::DBWithTTL*>(db->rep);
+  SaveError(errptr,
+      db_ttl->CreateColumnFamilyWithTtl(ColumnFamilyOptions(column_family_options->rep),
+        std::string(column_family_name), &(handle->rep), ttl));
+  return handle;
+}
+
 void crocksdb_drop_column_family(
     crocksdb_t* db,
     crocksdb_column_family_handle_t* handle,
