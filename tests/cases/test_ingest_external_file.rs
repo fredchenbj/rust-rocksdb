@@ -19,7 +19,7 @@ use tempdir::TempDir;
 
 pub fn gen_sst(
     opt: ColumnFamilyOptions,
-    cf: Option<&CFHandle>,
+    cf: Option<CFHandle>,
     path: &str,
     data: &[(&[u8], &[u8])],
 ) {
@@ -38,7 +38,7 @@ pub fn gen_sst(
     writer.finish().unwrap();
 }
 
-fn gen_sst_put(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str) {
+fn gen_sst_put(opt: ColumnFamilyOptions, cf: Option<CFHandle>, path: &str) {
     let _ = fs::remove_file(path);
     let env_opt = EnvOptions::new();
     let mut writer = if cf.is_some() {
@@ -53,7 +53,7 @@ fn gen_sst_put(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str) {
     writer.finish().unwrap();
 }
 
-fn gen_sst_merge(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str) {
+fn gen_sst_merge(opt: ColumnFamilyOptions, cf: Option<CFHandle>, path: &str) {
     let _ = fs::remove_file(path);
     let env_opt = EnvOptions::new();
     let mut writer = if cf.is_some() {
@@ -66,7 +66,7 @@ fn gen_sst_merge(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str) {
     writer.finish().unwrap();
 }
 
-fn gen_sst_delete(opt: ColumnFamilyOptions, cf: Option<&CFHandle>, path: &str) {
+fn gen_sst_delete(opt: ColumnFamilyOptions, cf: Option<CFHandle>, path: &str) {
     let _ = fs::remove_file(path);
     let env_opt = EnvOptions::new();
     let mut writer = if cf.is_some() {
@@ -100,7 +100,7 @@ fn concat_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOpera
 #[test]
 fn test_ingest_external_file() {
     let path = TempDir::new("_rust_rocksdb_ingest_sst").expect("");
-    let mut db = create_default_database(&path);
+    let db = create_default_database(&path);
     db.create_cf("cf1").unwrap();
     let handle = db.cf_handle("cf1").unwrap();
     let gen_path = TempDir::new("_rust_rocksdb_ingest_sst_gen").expect("");
@@ -214,7 +214,7 @@ fn test_ingest_external_file_new() {
 #[test]
 fn test_ingest_external_file_new_cf() {
     let path = TempDir::new("_rust_rocksdb_ingest_sst_new_cf").expect("");
-    let mut db = create_default_database(&path);
+    let db = create_default_database(&path);
     let gen_path = TempDir::new("_rust_rocksdb_ingest_sst_gen_new_cf").expect("");
     let test_sstfile = gen_path.path().join("test_sst_file_new_cf");
     let test_sstfile_str = test_sstfile.to_str().unwrap();
@@ -254,7 +254,7 @@ fn test_ingest_external_file_new_cf() {
     assert_eq!(snap.get_cf(handle, b"k3").unwrap().unwrap(), b"c");
 }
 
-fn check_kv(db: &DB, cf: Option<&CFHandle>, data: &[(&[u8], Option<&[u8]>)]) {
+fn check_kv(db: &DB, cf: Option<CFHandle>, data: &[(&[u8], Option<&[u8]>)]) {
     for &(k, v) in data {
         let handle = cf.unwrap_or(db.cf_handle("default").unwrap());
         if v.is_none() {
@@ -265,7 +265,7 @@ fn check_kv(db: &DB, cf: Option<&CFHandle>, data: &[(&[u8], Option<&[u8]>)]) {
     }
 }
 
-fn put_delete_and_generate_sst_cf(opt: ColumnFamilyOptions, db: &DB, cf: &CFHandle, path: &str) {
+fn put_delete_and_generate_sst_cf(opt: ColumnFamilyOptions, db: &DB, cf: CFHandle, path: &str) {
     db.put_cf(cf, b"k1", b"v1").unwrap();
     db.put_cf(cf, b"k2", b"v2").unwrap();
     db.put_cf(cf, b"k3", b"v3").unwrap();
@@ -275,7 +275,7 @@ fn put_delete_and_generate_sst_cf(opt: ColumnFamilyOptions, db: &DB, cf: &CFHand
     gen_sst_from_cf(opt, db, cf, path);
 }
 
-fn gen_sst_from_cf(opt: ColumnFamilyOptions, db: &DB, cf: &CFHandle, path: &str) {
+fn gen_sst_from_cf(opt: ColumnFamilyOptions, db: &DB, cf: CFHandle, path: &str) {
     let env_opt = EnvOptions::new();
     let mut writer = SstFileWriter::new_cf(env_opt, opt, cf);
     writer.open(path).unwrap();
@@ -324,13 +324,13 @@ fn test_ingest_simulate_real_world() {
         put_delete_and_generate_sst_cf(
             cf_opts,
             &db,
-            &handle,
+            handle,
             gen_path.path().join(cf).to_str().unwrap(),
         );
     }
 
     let path2 = TempDir::new("_rust_rocksdb_ingest_real_world_2").expect("");
-    let mut db2 = create_default_database(&path2);
+    let db2 = create_default_database(&path2);
     for cf in &ALL_CFS {
         if *cf != "default" {
             db2.create_cf(*cf).unwrap();
@@ -360,7 +360,7 @@ fn test_ingest_simulate_real_world() {
         gen_sst_from_cf(
             cf_opts,
             &db2,
-            &handle,
+            handle,
             gen_path.path().join(cf).to_str().unwrap(),
         );
     }
@@ -455,14 +455,14 @@ fn test_set_external_sst_file_global_seq_no() {
     let handle = db.cf_handle("default").unwrap();
     let seq_no = 1;
     // varify change seq_no
-    let r1 = set_external_sst_file_global_seq_no(&db, &handle, sstfile_str, seq_no);
+    let r1 = set_external_sst_file_global_seq_no(&db, handle, sstfile_str, seq_no);
     assert!(r1.unwrap() != seq_no);
     // varify that seq_no are equal
-    let r2 = set_external_sst_file_global_seq_no(&db, &handle, sstfile_str, seq_no);
+    let r2 = set_external_sst_file_global_seq_no(&db, handle, sstfile_str, seq_no);
     assert!(r2.unwrap() == seq_no);
 
     // change seq_no back to 0 so that it can be ingested
-    assert!(set_external_sst_file_global_seq_no(&db, &handle, sstfile_str, 0).is_ok());
+    assert!(set_external_sst_file_global_seq_no(&db, handle, sstfile_str, 0).is_ok());
 
     db.ingest_external_file(&IngestExternalFileOptions::new(), &[sstfile_str])
         .unwrap();

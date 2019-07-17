@@ -13,7 +13,7 @@ pub fn test_ttl() {
         let ttl = 10;
         opts.create_if_missing(true);
 
-        let mut db = match DB::open_cf_with_ttl(
+        let db = match DB::open_cf_with_ttl(
             opts,
             path.path().to_str().unwrap(),
             vec![("default", cf_opts)],

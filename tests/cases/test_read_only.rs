@@ -52,7 +52,7 @@ fn test_open_cf_for_read_only() {
     let path = temp.path().to_str().unwrap();
 
     {
-        let mut rw = DB::open_default(path).unwrap();
+        let rw = DB::open_default(path).unwrap();
         let _ = rw.create_cf("cf1").unwrap();
         let _ = rw.create_cf("cf2").unwrap();
     }
