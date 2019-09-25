@@ -37,7 +37,6 @@ impl Drop for Filter {
     }
 }
 
-
 #[test]
 fn test_compaction_filter() {
     /*
@@ -117,4 +116,3 @@ fn test_compaction_filter() {
     assert!(drop_called.load(Ordering::Relaxed));
     */
 }
-

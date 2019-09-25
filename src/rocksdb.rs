@@ -35,7 +35,7 @@ use std::mem;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::{fs, ptr, slice};
 use table_properties::TablePropertiesCollection;
 use util::is_power_of_two;
@@ -779,18 +779,64 @@ impl DB {
             }
         };
         let cname_ptr = cname.as_ptr();
-        let cf =
-        {
+        let cf = {
             let _lo = self.createcf.lock().unwrap();
             if self.cfs.read().unwrap().get(cfd.name) != None {
                 return Err("cf existed".to_owned());
             }
             unsafe {
                 let cf_handle = ffi_try!(crocksdb_create_column_family(
-                self.inner,
-                cfd.options.inner,
-                cname_ptr
-            ));
+                    self.inner,
+                    cfd.options.inner,
+                    cname_ptr
+                ));
+
+                self.cfs
+                    .write()
+                    .unwrap()
+                    .insert(cfd.name.to_owned(), cf_handle);
+
+                CFHandle {
+                    inner: cf_handle,
+                    db: PhantomData,
+                }
+            }
+        };
+        Ok(cf)
+    }
+
+    pub fn create_cf_with_ttl<'a, T>(&self, cfd: T, ttl: i32) -> Result<CFHandle, String>
+    where
+        T: Into<ColumnFamilyDescriptor<'a>>,
+    {
+        let cfd = cfd.into();
+        let cname = match CString::new(cfd.name.as_bytes()) {
+            Ok(c) => c,
+            Err(_) => {
+                return Err("Failed to convert path to CString when opening rocksdb".to_owned());
+            }
+        };
+        let cname_ptr = cname.as_ptr();
+        let cf = {
+            let _lo = self.createcf.lock().unwrap();
+            if self.cfs.read().unwrap().get(cfd.name) != None {
+                return Err("cf existed".to_owned());
+            }
+            unsafe {
+                let cf_handle = if ttl > 0 {
+                    ffi_try!(crocksdb_create_column_family_with_ttl(
+                        self.inner,
+                        cfd.options.inner,
+                        cname_ptr,
+                        ttl
+                    ))
+                } else {
+                    ffi_try!(crocksdb_create_column_family(
+                        self.inner,
+                        cfd.options.inner,
+                        cname_ptr
+                    ))
+                };
 
                 self.cfs
                     .write()

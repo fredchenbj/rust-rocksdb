@@ -264,6 +264,12 @@ crocksdb_create_column_family(crocksdb_t* db,
                              const crocksdb_options_t* column_family_options,
                              const char* column_family_name, char** errptr);
 
+extern C_ROCKSDB_LIBRARY_API crocksdb_column_family_handle_t*
+crocksdb_create_column_family_with_ttl(crocksdb_t* db,
+                             const crocksdb_options_t* column_family_options,
+                             const char* column_family_name, const int ttl,
+                             char** errptr);
+
 extern C_ROCKSDB_LIBRARY_API void crocksdb_drop_column_family(
     crocksdb_t* db, crocksdb_column_family_handle_t* handle, char** errptr);
 

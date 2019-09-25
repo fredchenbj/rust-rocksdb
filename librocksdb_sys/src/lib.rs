@@ -989,6 +989,13 @@ extern "C" {
         column_family_name: *const c_char,
         err: *mut *mut c_char,
     ) -> *mut DBCFHandle;
+    pub fn crocksdb_create_column_family_with_ttl(
+        db: *mut DBInstance,
+        column_family_options: *const Options,
+        column_family_name: *const c_char,
+        ttl: c_int,
+        err: *mut *mut c_char,
+    ) -> *mut DBCFHandle;
     pub fn crocksdb_drop_column_family(
         db: *mut DBInstance,
         column_family_handle: *mut DBCFHandle,
