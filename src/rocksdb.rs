@@ -833,20 +833,12 @@ impl DB {
                 return Err("cf existed".to_owned());
             }
             unsafe {
-                let cf_handle = if ttl > 0 {
-                    ffi_try!(crocksdb_create_column_family_with_ttl(
-                        self.inner,
-                        cfd.options.inner,
-                        cname_ptr,
-                        ttl
-                    ))
-                } else {
-                    ffi_try!(crocksdb_create_column_family(
-                        self.inner,
-                        cfd.options.inner,
-                        cname_ptr
-                    ))
-                };
+                let cf_handle = ffi_try!(crocksdb_create_column_family_with_ttl(
+                    self.inner,
+                    cfd.options.inner,
+                    cname_ptr,
+                    ttl
+                ));
 
                 self.cfs
                     .write()
