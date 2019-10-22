@@ -862,6 +862,13 @@ void crocksdb_drop_column_family(
   SaveError(errptr, db->rep->DropColumnFamily(handle->rep));
 }
 
+void crocksdb_destroy_column_family_handle(
+    crocksdb_t* db,
+    crocksdb_column_family_handle_t* handle,
+    char** errptr) {
+  SaveError(errptr, db->rep->DestroyColumnFamilyHandle(handle->rep));
+}
+
 uint32_t crocksdb_column_family_handle_id(crocksdb_column_family_handle_t* handle) {
   return handle->rep->GetID();
 }
@@ -1091,6 +1098,16 @@ crocksdb_iterator_t* crocksdb_create_iterator_cf(
     crocksdb_column_family_handle_t* column_family) {
   crocksdb_iterator_t* result = new crocksdb_iterator_t;
   result->rep = db->rep->NewIterator(options->rep, column_family->rep);
+  return result;
+}
+
+crocksdb_iterator_t* crocksdb_create_iterator_cf_with_base_db(
+    crocksdb_t* db,
+    const crocksdb_readoptions_t* options,
+    crocksdb_column_family_handle_t* column_family) {
+  crocksdb_iterator_t* result = new crocksdb_iterator_t;
+  auto* db_ttl = reinterpret_cast<rocksdb::DBWithTTL*>(db->rep);
+  result->rep = db_ttl->GetBaseDB()->NewIterator(options->rep, column_family->rep);
   return result;
 }
 
