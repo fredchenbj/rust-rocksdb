@@ -194,6 +194,30 @@ impl<D: Deref<Target = DB>> DBIterator<D> {
         }
     }
 
+    pub fn new_cf_with_base_db(db: D, cf_handle: CFHandle, readopts: ReadOptions) -> DBIterator<D> {
+        unsafe {
+            let iterator = if db.is_titan() {
+                crocksdb_ffi::ctitandb_create_iterator_cf(
+                    db.inner,
+                    readopts.get_inner(),
+                    readopts.get_titan_inner(),
+                    cf_handle.inner,
+                )
+            } else {
+                crocksdb_ffi::crocksdb_create_iterator_cf_with_base_db(
+                    db.inner,
+                    readopts.get_inner(),
+                    cf_handle.inner,
+                )
+            };
+            DBIterator {
+                _db: db,
+                _readopts: readopts,
+                inner: iterator,
+            }
+        }
+    }
+
     pub fn seek(&mut self, key: SeekKey) -> bool {
         unsafe {
             match key {

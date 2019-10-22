@@ -760,6 +760,11 @@ extern "C" {
         readopts: *const DBReadOptions,
         cf_handle: *mut DBCFHandle,
     ) -> *mut DBIterator;
+    pub fn crocksdb_create_iterator_cf_with_base_db(
+        db: *mut DBInstance,
+        readopts: *const DBReadOptions,
+        cf_handle: *mut DBCFHandle,
+    ) -> *mut DBIterator;
     pub fn crocksdb_create_snapshot(db: *mut DBInstance) -> *const DBSnapshot;
     pub fn crocksdb_release_snapshot(db: *mut DBInstance, snapshot: *const DBSnapshot);
     pub fn crocksdb_get_snapshot_sequence_number(snapshot: *const DBSnapshot) -> u64;
