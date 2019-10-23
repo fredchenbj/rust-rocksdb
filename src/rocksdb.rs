@@ -474,7 +474,6 @@ impl DB {
     where
         T: Into<ColumnFamilyDescriptor<'a>>,
     {
-        info!("open db cfs with ttl");
         if ttls.len() == 0 {
             return Err("ttls is empty in with_ttl function".to_owned());
         }
@@ -580,60 +579,19 @@ impl DB {
                 }
             }
 
-            if !with_ttl {
-                if let Some(flag) = error_if_log_file_exist {
-                    unsafe {
-                        ffi_try!(crocksdb_open_for_read_only_column_families(
-                            db_options,
-                            db_path,
-                            db_cfs_count,
-                            db_cf_ptrs,
-                            db_cf_opts,
-                            db_cf_handles,
-                            flag
-                        ))
-                    }
-                } else if titan_options.is_null() {
-                    unsafe {
-                        ffi_try!(crocksdb_open_column_families(
-                            db_options,
-                            db_path,
-                            db_cfs_count,
-                            db_cf_ptrs,
-                            db_cf_opts,
-                            db_cf_handles
-                        ))
-                    }
-                } else {
-                    unsafe {
-                        ffi_try!(ctitandb_open_column_families(
-                            db_path,
-                            db_options,
-                            titan_options,
-                            db_cfs_count,
-                            db_cf_ptrs,
-                            db_cf_opts,
-                            titan_cf_opts,
-                            db_cf_handles
-                        ))
-                    }
-                }
-            } else {
-                info!("rocksdb open cfs with ttl");
-                let ttl_array = ttls_vec.as_ptr() as *const c_int;
+            let ttl_array = ttls_vec.as_ptr() as *const c_int;
 
-                unsafe {
-                    ffi_try!(crocksdb_open_column_families_with_ttl(
-                        db_options,
-                        db_path,
-                        db_cfs_count,
-                        db_cf_ptrs,
-                        db_cf_opts,
-                        ttl_array,
-                        readonly,
-                        db_cf_handles
-                    ))
-                }
+            unsafe {
+                ffi_try!(crocksdb_open_column_families_with_ttl(
+                    db_options,
+                    db_path,
+                    db_cfs_count,
+                    db_cf_ptrs,
+                    db_cf_opts,
+                    ttl_array,
+                    readonly,
+                    db_cf_handles
+                ))
             }
         };
 
