@@ -474,6 +474,7 @@ impl DB {
     where
         T: Into<ColumnFamilyDescriptor<'a>>,
     {
+        info!("open db cfs with ttl");
         if ttls.len() == 0 {
             return Err("ttls is empty in with_ttl function".to_owned());
         }
@@ -618,6 +619,7 @@ impl DB {
                     }
                 }
             } else {
+                info!("rocksdb open cfs with ttl");
                 let ttl_array = ttls_vec.as_ptr() as *const c_int;
 
                 unsafe {
