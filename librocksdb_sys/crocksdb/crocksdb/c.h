@@ -285,6 +285,9 @@ crocksdb_create_column_family_with_ttl(crocksdb_t* db,
 extern C_ROCKSDB_LIBRARY_API void crocksdb_drop_column_family(
     crocksdb_t* db, crocksdb_column_family_handle_t* handle, char** errptr);
 
+extern C_ROCKSDB_LIBRARY_API void crocksdb_destroy_column_family_handle(
+    crocksdb_t* db, crocksdb_column_family_handle_t* handle, char** errptr);
+
 extern C_ROCKSDB_LIBRARY_API uint32_t crocksdb_column_family_handle_id(
     crocksdb_column_family_handle_t*);
 

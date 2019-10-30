@@ -859,6 +859,13 @@ void crocksdb_drop_column_family(
   SaveError(errptr, db->rep->DropColumnFamily(handle->rep));
 }
 
+void crocksdb_destroy_column_family_handle(
+    crocksdb_t* db,
+    crocksdb_column_family_handle_t* handle,
+    char** errptr) {
+  SaveError(errptr, db->rep->DestroyColumnFamilyHandle(handle->rep));
+}
+
 uint32_t crocksdb_column_family_handle_id(crocksdb_column_family_handle_t* handle) {
   return handle->rep->GetID();
 }

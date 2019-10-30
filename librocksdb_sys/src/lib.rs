@@ -1039,6 +1039,11 @@ extern "C" {
         column_family_handle: *mut DBCFHandle,
         err: *mut *mut c_char,
     );
+    pub fn crocksdb_destroy_column_family_handle(
+        db: *mut DBInstance,
+        column_family_handle: *mut DBCFHandle,
+        err: *mut *mut c_char,
+    );
     pub fn crocksdb_column_family_handle_id(column_family_handle: *mut DBCFHandle) -> u32;
     pub fn crocksdb_column_family_handle_destroy(column_family_handle: *mut DBCFHandle);
     pub fn crocksdb_list_column_families(

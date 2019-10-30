@@ -847,6 +847,10 @@ impl DB {
 
         unsafe {
             ffi_try!(crocksdb_drop_column_family(self.inner, cf.unwrap()));
+            ffi_try!(crocksdb_destroy_column_family_handle(
+                self.inner,
+                cf.unwrap()
+            ));
         }
 
         Ok(())
