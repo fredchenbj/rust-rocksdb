@@ -87,6 +87,7 @@ pub struct DB {
     opts: DBOptions,
     readonly: bool,
     cf_lock: Arc<Mutex<i32>>,
+    pub cache: Option<Cache>,
 }
 
 impl Debug for DB {
@@ -455,14 +456,14 @@ impl DB {
         if ttls.len() == 0 {
             return Err("ttls is empty in with_ttl function".to_owned());
         }
-        DB::open_cf_with_ttl(opts, path, cfds, ttls)
+        DB::open_cf_with_ttl(opts, path, cfds, ttls, None)
     }
 
     pub fn open_cf<'a, T>(opts: DBOptions, path: &str, cfds: Vec<T>) -> Result<DB, String>
     where
         T: Into<ColumnFamilyDescriptor<'a>>,
     {
-        DB::open_cf_internal(opts, path, cfds, &[], None)
+        DB::open_cf_internal(opts, path, cfds, &[], None, None)
     }
 
     pub fn open_cf_with_ttl<'a, T>(
@@ -470,6 +471,7 @@ impl DB {
         path: &str,
         cfds: Vec<T>,
         ttls: &[i32],
+        cache: Option<Cache>,
     ) -> Result<DB, String>
     where
         T: Into<ColumnFamilyDescriptor<'a>>,
@@ -477,7 +479,7 @@ impl DB {
         if ttls.len() == 0 {
             return Err("ttls is empty in with_ttl function".to_owned());
         }
-        DB::open_cf_internal(opts, path, cfds, ttls, None)
+        DB::open_cf_internal(opts, path, cfds, ttls, None, cache)
     }
 
     pub fn open_for_read_only(
@@ -498,7 +500,7 @@ impl DB {
     where
         T: Into<ColumnFamilyDescriptor<'a>>,
     {
-        DB::open_cf_internal(opts, path, cfds, &[], Some(error_if_log_file_exist))
+        DB::open_cf_internal(opts, path, cfds, &[], Some(error_if_log_file_exist), None)
     }
 
     fn open_cf_internal<'a, T>(
@@ -509,6 +511,7 @@ impl DB {
         // if none, open for read write mode.
         // otherwise, open for read only.
         error_if_log_file_exist: Option<bool>,
+        cache: Option<Cache>,
     ) -> Result<DB, String>
     where
         T: Into<ColumnFamilyDescriptor<'a>>,
@@ -619,6 +622,7 @@ impl DB {
             opts: opts,
             readonly: readonly,
             cf_lock: mutex,
+            cache: cache,
         })
     }
 
@@ -2388,6 +2392,7 @@ impl Drop for SequentialFile {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct Cache {
     pub inner: *mut DBCache,
 }
@@ -2400,13 +2405,13 @@ impl Cache {
     }
 }
 
-impl Drop for Cache {
-    fn drop(&mut self) {
-        unsafe {
-            crocksdb_ffi::crocksdb_cache_destroy(self.inner);
-        }
-    }
-}
+//impl Drop for Cache {
+//    fn drop(&mut self) {
+//        unsafe {
+//            crocksdb_ffi::crocksdb_cache_destroy(self.inner);
+//        }
+//    }
+//}
 
 pub struct MemoryAllocator {
     pub inner: *mut DBMemoryAllocator,
